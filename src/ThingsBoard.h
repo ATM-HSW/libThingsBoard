@@ -10,6 +10,7 @@
 #include "mbed.h"
 #include <string>
 #include "http_request.h"
+#include "https_request.h"
 #include "ArduinoJson.h"
 #include "ArduinoJson/Polyfills/type_traits.hpp"
 
@@ -23,7 +24,7 @@
 
 #define OK_SUCCESS              200     // OK / Success
 
-#define PRINT_HTTP
+//#define PRINT_HTTP
 
 // Telemetry record class, allows to store different data using common interface.
 class Telemetry {
@@ -36,6 +37,7 @@ class Telemetry {
 //            size_t MaxFieldsAmt = Default_Fields_Amt,
 //            typename Logger = ThingsBoardDefaultLogger>
   friend class ThingsBoardHttpSized;
+  friend class ThingsBoardHttpsSized;
 
 public:
   inline Telemetry()
@@ -316,7 +318,193 @@ private:
   ThingsBoardLogger *m_Logger;
 };
 
+// ThingsBoard HTTPS client class
+//template <size_t PayloadSize, size_t MaxFieldsAmt, typename Logger>
+class ThingsBoardHttpsSized
+{
+public:
+  // Initializes ThingsBoardHttpSized class with network client.
+  inline ThingsBoardHttpsSized() { }
+
+  // Destroys ThingsBoardHttpSized class with network client.
+  inline ~ThingsBoardHttpsSized() { }
+  
+  inline void begin(TLSSocket *socket, const char *access_token, const char *host, int port, ThingsBoardLogger *logger = new ThingsBoardDefaultLogger()) {
+    m_Socket = socket;
+    m_Token = access_token;
+    m_Host = host;
+    m_Port = port;
+    m_Logger = logger;
+  }
+  
+  inline void begin(const char *access_token, const char *host, int port, ThingsBoardLogger *logger = new ThingsBoardDefaultLogger()) {
+    m_Socket = nullptr;
+    m_Token = access_token;
+    m_Host = host;
+    m_Port = port;
+    m_Logger = logger;
+  }
+  
+  inline void setSocket(TLSSocket *socket) {
+    m_Socket = socket;
+  }
+
+
+  //----------------------------------------------------------------------------
+  // Telemetry API
+
+  // Sends integer telemetry data to the ThingsBoard, returns true on success.
+  inline bool sendTelemetryInt(const char *key, int value) {
+    return sendKeyval(key, value);
+  }
+
+  // Sends boolean telemetry data to the ThingsBoard, returns true on success.
+  inline bool sendTelemetryBool(const char *key, bool value) {
+    return sendKeyval(key, value);
+  }
+
+  // Sends float telemetry data to the ThingsBoard, returns true on success.
+  inline bool sendTelemetryFloat(const char *key, float value) {
+    return sendKeyval(key, value);
+  }
+
+  // Sends string telemetry data to the ThingsBoard, returns true on success.
+  inline bool sendTelemetryString(const char *key, const char *value) {
+    return sendKeyval(key, value);
+  }
+
+  // Sends aggregated telemetry to the ThingsBoard.
+  inline bool sendTelemetry(const Telemetry *data, size_t data_count) {
+    return sendDataArray(data, data_count);
+  }
+
+  //----------------------------------------------------------------------------
+  // Attribute API
+
+  // Sends integer attribute with given name and value.
+  inline bool sendAttributeInt(const char *attrName, int value) {
+    return sendKeyval(attrName, value, false);
+  }
+
+  // Sends boolean attribute with given name and value.
+  inline bool sendAttributeBool(const char *attrName, bool value) {
+    return sendKeyval(attrName, value, false);
+  }
+
+  // Sends float attribute with given name and value.
+  inline bool sendAttributeFloat(const char *attrName, float value) {
+    return sendKeyval(attrName, value, false);
+  }
+
+  // Sends string attribute with given name and value.
+  inline bool sendAttributeString(const char *attrName, const char *value) {
+    return sendKeyval(attrName, value, false);
+  }
+
+  // Sends aggregated attributes to the ThingsBoard.
+  inline bool sendAttributes(const Attribute *data, size_t data_count) {
+    return sendDataArray(data, data_count, false);
+  }
+
+private:
+  // Sends custom JSON telemetry or attribute string to the ThingsBoard, using HTTP.
+  inline bool sendTelemetryOrAttributeJson(const char *json, bool telemetry) {
+    if(!json || !m_Token)
+      return  false;
+    
+    if(m_Socket == nullptr)
+      return false;
+
+    string path = string("https://") + string(m_Host) + string(":") + std::to_string(m_Port) + string("/api/v1/") + m_Token + (telemetry?"/telemetry":"/attributes");
+ 
+    HttpsRequest* request = new HttpsRequest(this->m_Socket, HTTP_POST, path.c_str());
+    request->set_header("Content-Type", "application/json");
+
+    #ifdef PRINT_HTTP
+      printf("POST \"%s\"\nbody \"%s\"", path.c_str(), json);
+    #endif
+
+    HttpResponse* response = request->send(json, strlen(json));
+
+    #ifdef PRINT_HTTP
+    printf("\n----- HTTP POST response -----\n");
+    printf("Status: %d - %s\n", response->get_status_code(), response->get_status_message().c_str());
+
+    printf("Headers:\n");
+    for (size_t ix = 0; ix < response->get_headers_length(); ix++) {
+      printf("\t%s: %s\n", response->get_headers_fields()[ix]->c_str(), response->get_headers_values()[ix]->c_str());
+    }
+    printf("\nBody (%d bytes):\n\n%s\n", response->get_body_length(), response->get_body_as_string().c_str());
+    #endif
+
+    int status = response->get_status_code();
+    delete request;
+
+    return (status == OK_SUCCESS);
+  }
+
+  // Sends array of attributes or telemetry to ThingsBoard
+  bool sendDataArray(const Telemetry *data, size_t data_count, bool telemetry = true) {
+    if (TB_FIELDS_AMT < data_count) {
+      m_Logger->log("too much JSON fields passed");
+      return false;
+    }
+    char payload[TB_PAYLOAD_SIZE];
+    {
+      StaticJsonDocument<JSON_OBJECT_SIZE(TB_FIELDS_AMT)> jsonBuffer;
+      JsonVariant object = jsonBuffer.template to<JsonVariant>();
+
+      for (size_t i = 0; i < data_count; ++i) {
+        if (data[i].serializeKeyval(object) == false) {
+          m_Logger->log("unable to serialize data");
+          return false;
+        }
+      }
+
+      if (measureJson(jsonBuffer) > TB_PAYLOAD_SIZE - 1) {
+        m_Logger->log("too small buffer for JSON data");
+        return false;
+      }
+      serializeJson(object, payload, sizeof(payload));
+    }
+
+    return sendTelemetryOrAttributeJson(payload, telemetry);
+}
+
+  // Sends single key-value in a generic way.
+  template<typename T>
+  bool sendKeyval(const char *key, T value, bool telemetry = true) {
+    Telemetry t(key, value);
+
+    char payload[TB_PAYLOAD_SIZE];
+    {
+      Telemetry t(key, value);
+      StaticJsonDocument<JSON_OBJECT_SIZE(1)> jsonBuffer;
+      JsonVariant object = jsonBuffer.template to<JsonVariant>();
+      if (t.serializeKeyval(object) == false) {
+        m_Logger->log("unable to serialize data");
+        return false;
+      }
+
+      if (measureJson(jsonBuffer) > TB_PAYLOAD_SIZE - 1) {
+        m_Logger->log("too small buffer for JSON data");
+        return false;
+      }
+      serializeJson(object, payload, sizeof(payload));
+    }
+    return sendTelemetryOrAttributeJson(payload, telemetry);
+  }
+
+  TLSSocket *m_Socket;
+  const char *m_Token;
+  const char *m_Host;
+  const char* m_ssl_ca_pem;
+  int m_Port;
+  ThingsBoardLogger *m_Logger;
+};
+
 using ThingsBoardHttp = ThingsBoardHttpSized;
+using ThingsBoardHttps = ThingsBoardHttpsSized;
 
 //using ThingsBoard = ThingsBoardSized<>;
 
