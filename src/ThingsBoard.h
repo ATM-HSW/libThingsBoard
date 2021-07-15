@@ -63,6 +63,12 @@ public:
   // Constructs telemetry record from string value.
   inline Telemetry(const char *key, const char *val)
   :m_type(TYPE_STR), m_key(key), m_value()   { m_value.str = val; }
+  
+  inline void setValue(int val)         { m_type = TYPE_INT;  m_value.integer = val; }
+  inline void setValue(uint32_t val)    { m_type = TYPE_UINT; m_value.uinteger = val; }
+  inline void setValue(bool val)        { m_type = TYPE_BOOL; m_value.boolean = val; }
+  inline void setValue(float val)       { m_type = TYPE_REAL; m_value.real = val; }
+  inline void setValue(const char *val) { m_type = TYPE_STR;  m_value.str = val; }
 
 private:
   // Data container
@@ -70,6 +76,7 @@ private:
     const char  *str;
     bool        boolean;
     int         integer;
+    uint32_t    uinteger;
     float       real;
   };
 
@@ -77,6 +84,7 @@ private:
   enum dataType {
     TYPE_NONE,
     TYPE_BOOL,
+    TYPE_UINT,
     TYPE_INT,
     TYPE_REAL,
     TYPE_STR,
@@ -96,6 +104,9 @@ private:
         case TYPE_INT:
           jsonObj[m_key] = m_value.integer;
         break;
+        case TYPE_UINT:
+          jsonObj[m_key] = m_value.uinteger;
+        break;
         case TYPE_REAL:
           jsonObj[m_key] = m_value.real;
         break;
@@ -112,6 +123,9 @@ private:
         break;
         case TYPE_INT:
           return jsonObj.set(m_value.integer);
+        break;
+        case TYPE_UINT:
+          return jsonObj.set(m_value.uinteger);
         break;
         case TYPE_REAL:
           return jsonObj.set(m_value.real);
