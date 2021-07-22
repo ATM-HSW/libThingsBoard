@@ -15,7 +15,7 @@
 #include "ArduinoJson/Polyfills/type_traits.hpp"
 
 #ifndef TB_PAYLOAD_SIZE
-#define TB_PAYLOAD_SIZE 64
+#define TB_PAYLOAD_SIZE 128
 #endif
 
 #ifndef TB_FIELDS_AMT
